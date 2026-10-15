@@ -1,0 +1,17 @@
+# SAM build output
+.aws-sam/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Frontend
+node_modules/
+frontend/dist/
+
+# Local secrets, just in case
+.env

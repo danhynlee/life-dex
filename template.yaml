@@ -1,0 +1,55 @@
+AWSTemplateFormatVersion: "2010-09-09"
+# The Transform line is what makes this a SAM template. SAM is a CloudFormation
+# macro: at deploy time it expands AWS::Serverless::* resources into plain
+# CloudFormation (Lambda function + IAM role + Scheduler schedule + Scheduler role).
+Transform: AWS::Serverless-2016-10-31
+Description: Life Dex - GitHub commit ingest (T1 smoke test)
+
+Parameters:
+  TokenParamName:
+    Type: String
+    Default: life-dex/github-token
+    # SSMParameterReadPolicy builds arn:...:parameter/${ParameterName},
+    # so the policy wants the name WITHOUT the leading slash.
+    Description: SSM parameter name for the GitHub token, without the leading slash
+
+# Globals apply to every AWS::Serverless::Function in the file.
+Globals:
+  Function:
+    Runtime: python3.11   # must match your local Python minor version for `sam build`
+    Timeout: 30
+    MemorySize: 256
+
+Resources:
+  IngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/
+      Handler: app.handler          # file app.py, function handler
+      Environment:
+        Variables:
+          TOKEN_PARAM: !Sub "/${TokenParamName}"
+      Policies:
+        # Policy template: least-privilege ssm:GetParameter(s) on this one path.
+        # No kms:Decrypt needed: the AWS-managed aws/ssm key allows decryption
+        # for any principal in the account calling through SSM.
+        - SSMParameterReadPolicy:
+            ParameterName: !Ref TokenParamName
+      Events:
+        Schedule:
+          Type: ScheduleV2          # EventBridge Scheduler (V1 "Schedule" = older EventBridge rules)
+          Properties:
+            ScheduleExpression: rate(5 minutes)   # T3 changes this to rate(1 hour) - singular unit for 1
+            State: ENABLED
+
+  # Without this, Lambda creates the log group on first invoke with
+  # retention = never expire. Owning it here makes retention explicit.
+  IngestFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${IngestFunction}"
+      RetentionInDays: 14
+
+Outputs:
+  IngestFunctionName:
+    Value: !Ref IngestFunction

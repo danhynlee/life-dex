@@ -1,16 +1,20 @@
-"""T1 smoke test: prove the Lambda can read and decrypt the GitHub token from SSM.
-
-T2 replaces the body of handler() with the real ingest; get_token() stays.
-"""
+"""Ingest Lambda: read the GitHub token from SSM, pull new commits, store them in DynamoDB."""
+import json
 import logging
 import os
+from datetime import UTC, datetime
 
 import boto3
+from github_client import GitHubClient
+from ingest import run
+from store import CommitStore
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)  # Lambda's root logger defaults to WARNING
 
+# Module scope: created once per container, reused across warm invocations.
 _ssm = boto3.client("ssm")
+_table = boto3.resource("dynamodb").Table(os.environ["TABLE_NAME"])
 _token: str | None = None
 
 
@@ -24,10 +28,7 @@ def get_token() -> str:
 
 
 def handler(event, context):
-    token = get_token()
-    if not token.startswith("github_pat_"):
-        # Fail loudly without echoing any part of the value.
-        raise ValueError("SSM value is not a fine-grained GitHub token")
-    # Log the length only. Never log the token, or any prefix/suffix of it.
-    logger.info("token ok (len=%d)", len(token))
-    return {"ok": True}
+    gh = GitHubClient(get_token())
+    result = run(gh, CommitStore(_table), datetime.now(UTC))
+    logger.info(json.dumps({"msg": "ingest ok", **result, "github_calls": gh.calls}))
+    return result

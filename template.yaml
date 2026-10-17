@@ -3,7 +3,7 @@ AWSTemplateFormatVersion: "2010-09-09"
 # macro: at deploy time it expands AWS::Serverless::* resources into plain
 # CloudFormation (Lambda function + IAM role + Scheduler schedule + Scheduler role).
 Transform: AWS::Serverless-2016-10-31
-Description: Life Dex - GitHub commit ingest (T1 smoke test)
+Description: Life Dex - GitHub commit ingest
 
 Parameters:
   TokenParamName:
@@ -17,10 +17,23 @@ Parameters:
 Globals:
   Function:
     Runtime: python3.11   # must match your local Python minor version for `sam build`
-    Timeout: 30
+    Timeout: 120          # T2: was 30; 30-day backfill headroom. Billed on Duration, not Timeout.
     MemorySize: 256
 
 Resources:
+  LifeDexTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      # T2: no TableName. CloudFormation generates one (life-dex-LifeDexTable-XXXX).
+      # A fixed name blocks replacement updates and can collide after `sam delete`.
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: pk, AttributeType: S }
+        - { AttributeName: sk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: pk, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
+
   IngestFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -29,18 +42,21 @@ Resources:
       Environment:
         Variables:
           TOKEN_PARAM: !Sub "/${TokenParamName}"
+          TABLE_NAME: !Ref LifeDexTable          # T2: !Ref on a table returns its name
       Policies:
         # Policy template: least-privilege ssm:GetParameter(s) on this one path.
         # No kms:Decrypt needed: the AWS-managed aws/ssm key allows decryption
         # for any principal in the account calling through SSM.
         - SSMParameterReadPolicy:
             ParameterName: !Ref TokenParamName
+        - DynamoDBCrudPolicy:                    # T2: CRUD scoped to this table's ARN only
+            TableName: !Ref LifeDexTable
       Events:
         Schedule:
           Type: ScheduleV2          # EventBridge Scheduler (V1 "Schedule" = older EventBridge rules)
           Properties:
             ScheduleExpression: rate(5 minutes)   # T3 changes this to rate(1 hour) - singular unit for 1
-            State: ENABLED
+            State: DISABLED                       # T2: off while developing; T3 re-enables
 
   # Without this, Lambda creates the log group on first invoke with
   # retention = never expire. Owning it here makes retention explicit.
@@ -53,3 +69,5 @@ Resources:
 Outputs:
   IngestFunctionName:
     Value: !Ref IngestFunction
+  TableName:                                     # T2: the done-check query reads this
+    Value: !Ref LifeDexTable
